@@ -30,10 +30,12 @@ set to match, but the single-user experience is identical either way.
 
 ### 1. Get the weights
 
-Download `glm-5.3-flash-mlx-4bit-mtp` (4-bit MLX + MTP heads) from Hugging Face
-(`zai-org/GLM-5.3-Flash-MLX-4bit` or equivalent — the folder must carry the MTP weights,
-a checkpoint without them decodes 1 token/step). ~170 GB free on an external Thunderbolt SSD
-works fine; internal disk also works if you have the room.
+```bash
+huggingface-cli download TensorFold/GLM-5.3-Flash-MLX-4bit-MTP \
+    --local-dir /path/to/glm-5.3-flash-mlx-4bit-mtp
+```
+
+Checkpoint: **[TensorFold/GLM-5.3-Flash-MLX-4bit-MTP](https://huggingface.co/TensorFold/GLM-5.3-Flash-MLX-4bit-MTP)** (revision `d2b17f525344`, the one this recipe is verified against). 43 safetensors shards, ~170 GB on disk, 180.6 GB of engine-readable weights (45 layers + the MTP head; a ~1.1 GB vision tower is present but unused by the native engine). The folder must carry the MTP weights — a checkpoint without them decodes 1 token/step. ~170 GB free on an external Thunderbolt SSD works fine; internal disk also works if you have the room.
 
 ### 2. (Optional but recommended) raise the GPU wired limit
 
@@ -89,6 +91,34 @@ GLM_LOAD_LIMIT_GB=218 zig-out/native/bin/tensorfold-native serve \
   the next request reloads (~3–4 min cold start). Drop the flag if you want it always resident.
 - Point any OpenAI-compatible client at `http://localhost:8420/v1`. First token on a cold cache
   is ~1.6 s; a warm continuing turn resumes from the prompt cache in milliseconds.
+
+### What a successful start looks like
+
+The engine's startup log from a fresh load on this machine (paths redacted; the repeated
+`GLM_LOAD_LIMIT_GB` warning is the engine's own boilerplate — it fires whenever the limit is
+raised past 70 %, by design):
+
+```text
+warning: glm: GLM_LOAD_LIMIT_GB lets this Mac load 235.0 GB, past the default 179.2 GB (70% of RAM): a load that wires most of the RAM can stall macOS until its watchdog restarts the Mac, so run nothing else large beside it
+glm plan: 45 of 45 layers and the MTP layer, 180.58 GB in buffers, every tensor's name, dtype and shape checked; 4-bit/64 x408
+info: glm: dropped 0.0 GiB of the checkpoint from the file cache, the 6.5 GiB free memory lacked for the load (7.49 s)
+info: glm: 8 streams share one 499964-token MLA pool
+info: glm: 182.4 GiB kept wired between requests, inside the 218.9 GiB load limit
+info: GLM-5.3-Flash loaded in 77.5 s (180.6 GB of weights), context 500000 tokens, 8 streams
+[tensorfold] prompt chunks of up to 16,384 tokens, cut at replies 256+ tokens apart
+[tensorfold] open-file limit raised: soft 256 -> 65536
+warning: libtfgrammar.dylib is required for structured output and required tool calls (HTTP 400 when missing); restore the matching release archive's lib/ directory or run zig build grammar -Dxgrammar=DIR; prepare DIR with git clone --branch v0.2.8 --recurse-submodules https://github.com/mlc-ai/xgrammar
+[tensorfold] serving glm-5.3-flash at http://127.0.0.1:8420/v1 (sampling: temperature 1.0, top_p 0.95; drafts: on; context: 499947; loaded in 83.2s)
+[tensorfold] idle unload on: the engine closes after 900 s idle and the next request reloads it (a full model load)
+```
+
+Notes on the interesting lines: `180.58 GB in buffers` is the full language model + MTP head
+passing the tensor name/dtype/shape check; `dropped 0.0 GiB ... free memory lacked` is the
+engine's advisory cache-drop notice (it proceeds anyway — see upstream issue #498 for why 70 %
+of RAM misses this checkpoint by 1.4 GB without the env override); `182.4 GiB kept wired ...
+inside the 218.9 GiB load limit` is the steady-state wired residency the benchmarks below were
+measured at; and the `libtfgrammar.dylib` warning only matters if you need structured output /
+forced tool calls — plain chat works without it.
 
 ## Benchmarks (measured, Mac Studio M3 Ultra 256 GB, TensorFold 1.1.5, Metal)
 
